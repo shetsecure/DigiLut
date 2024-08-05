@@ -1,8 +1,12 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
+
 from copy import deepcopy
 import csv
 import os
 
+import numpy as np
+
+from wsi import WholeSlideImage
 
 """
 FOR ANNOTATIONS
@@ -145,3 +149,59 @@ def convert_to_yolo_format(
     assert all(0 <= val <= 1 for val in (x_center, y_center, width, height)), "YOLO coordinates must be in [0, 1]"
 
     return (class_id, x_center, y_center, width, height)
+
+
+def xyxy_to_0(wsi: WholeSlideImage, core, box):
+
+    extract_level_to_0 = wsi.wsi.level_downsamples[core.level]
+
+    # Adjust box coordinates
+    x, y, xx, yy = box
+    width = xx - x
+    height = yy - y
+
+    # Map box coordinates from core level to Level 0
+    x = core.bbox.x + x * extract_level_to_0
+    y = core.bbox.y + y * extract_level_to_0
+    width = width * extract_level_to_0
+    height = height * extract_level_to_0
+
+    return int(x), int(y), round(width), round(height)
+
+
+def xyxys_to_0(wsi: WholeSlideImage, cores_with_lesions):
+    # cores_with_lesions : Dict[Core, np.ndarray]
+
+    all_lesions_coords_xyxyc = []  # xyxyc
+
+    for core, boxes in cores_with_lesions.items():
+        for box in boxes:
+            x, y, w, h = xyxy_to_0(wsi, core, box[:4])
+            all_lesions_coords_xyxyc.append((x, y, x + w, y + h, box[-1]))
+
+    return all_lesions_coords_xyxyc
+
+
+def sort_xyxys(all_lesions_coords_xyxyc: List[Tuple[int, int, int, int]]):
+    sorted_boxes = sorted(all_lesions_coords_xyxyc, key=lambda x: x[-1], reverse=True)
+    sorted_boxes = [sublist[:-1] for sublist in sorted_boxes]
+
+    return sorted_boxes
+
+
+def post_process_predicted_boxes_0(predicted_boxes_0, number_of_required_boxes):
+    sorted_predicted_boxes_0 = sort_xyxys(predicted_boxes_0)
+
+    if len(sorted_predicted_boxes_0) > number_of_required_boxes:
+        return sorted_predicted_boxes_0[:number_of_required_boxes]
+    else:
+        # for now we just gonna duplicate it
+        if len(sorted_predicted_boxes_0) > 0:
+            box = sorted_predicted_boxes_0[0]
+        else:
+            box = [0, 0, 0, 0]
+
+        for _ in range(number_of_required_boxes - len(sorted_predicted_boxes_0)):
+            sorted_predicted_boxes_0.append(box)
+
+        return sorted_predicted_boxes_0

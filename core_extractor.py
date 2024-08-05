@@ -1,20 +1,18 @@
 import cv2
 import numpy as np
-from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from dataclasses import dataclass
-from typing import List, NamedTuple, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import List, NamedTuple
 from types import FunctionType
 from copy import deepcopy
 
 
 import utils
 
-# import mapping
+from wsi import WholeSlideImage
 from tissue_segmenter import TissueSegment
-from config import Config
 
 
 class BoundingBox(NamedTuple):
@@ -27,14 +25,30 @@ class BoundingBox(NamedTuple):
 @dataclass
 class Core:
     bbox: BoundingBox
-    annotations: List[BoundingBox]
-    level: int
+    annotations: List[BoundingBox] = field(default_factory=list)
+    level: int = 0
+    _hash: int = field(init=False, repr=False)
+
+    def __post_init__(self):
+        self._hash = hash((self.bbox, tuple(id(a) for a in self.annotations), self.level))
+
+    def __hash__(self):
+        return self._hash
+
+    def __eq__(self, other):
+        if not isinstance(other, Core):
+            return NotImplemented
+        return (
+            self.bbox == other.bbox
+            and len(self.annotations) == len(other.annotations)
+            and all(a is b for a, b in zip(self.annotations, other.annotations))
+            and self.level == other.level
+        )
 
 
 class CoreExtractor:
-    def __init__(self, wsi, config: Config):
+    def __init__(self, wsi: WholeSlideImage):
         self.wsi = wsi
-        self.config = config
 
     def extract_cores(self, tissue_segments: List[TissueSegment], extraction_level: int) -> List[Core]:
         """
@@ -111,28 +125,12 @@ class CoreExtractor:
                     ann = BoundingBox(*ann)
 
                 if intersection or is_included:
-                    # Link the corresponding annotations and make it relative
+                    # Link the corresponding annotations and make it relative to the core
                     ann = BoundingBox(*ann)
                     ann = BoundingBox(ann.x - core.bbox.x, ann.y - core.bbox.y, ann.w, ann.h)
                     core.annotations.append(ann)
 
         return cores
-
-    # def save_cores(self, cores: List[Core], output_dir: Path, extraction_level: int):
-    #     output_dir.mkdir(parents=True, exist_ok=True)
-
-    #     for i, core in enumerate(cores):
-    #         core_region = self.wsi.wsi.read_region((core.bbox.x, core.bbox.y), extraction_level, (core.bbox.w, core.bbox.h)).convert("RGB")
-    #         core_name = f"{self.wsi.name}_Core_{i}_L{extraction_level}_{core.bbox.w}_{core.bbox.h}"
-    #         core_region.save(output_dir / f"{core_name}.png")
-
-    #         yolo_annotations = [
-    #             utils.convert_to_yolo_format((ann.x, ann.y, ann.w, ann.h), core.bbox.w, core.bbox.h) for ann in core.annotations
-    #         ]
-
-    #         with open(output_dir / f"{core_name}.txt", "w") as f:
-    #             for annotation in yolo_annotations:
-    #                 f.write(" ".join(map(str, annotation)) + "\n")
 
     def visualize_cores_with_annotations(self, cores: List[Core], extraction_level: int, cast_fn=round):
         """

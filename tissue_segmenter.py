@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List
 import cv2
 import numpy as np
-from config import Config
+from config import Segmentationconfig
 
 import math
 from PIL import Image
@@ -16,7 +16,7 @@ class TissueSegment:
 
 class TissueSegmenter:
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Segmentationconfig):
         self.config = config
         self.slide_image = None
 

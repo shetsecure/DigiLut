@@ -1,10 +1,10 @@
 import openslide
 from pathlib import Path
-from config import Config
 
 
 class WholeSlideImage:
     def __init__(self, path: Path):
+        path = Path(path)
         self.name = path.stem
 
         self.wsi = openslide.open_slide(str(path))

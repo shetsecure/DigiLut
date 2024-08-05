@@ -11,6 +11,7 @@ from enum import Enum, auto
 import utils
 from core_extractor import Core, BoundingBox
 from wsi import WholeSlideImage
+from config import Coreconfig
 
 
 class AnnotationFormat(Enum):
@@ -22,37 +23,64 @@ class AnnotationFormat(Enum):
 
 class CoreAnnotationManager:
     def __init__(
-        self, output_dir: Union[Path, str], annotation_format: AnnotationFormat = AnnotationFormat.YOLO, cores_format: str = "png"
+        self,
+        output_dir: Union[Path, str],
+        annotation_format: AnnotationFormat = AnnotationFormat.YOLO,
+        core_config: Coreconfig = Coreconfig(),
     ):
         self.output_dir = Path(output_dir)
         self.annotation_format = annotation_format
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.cores_format = cores_format
+        self.core_config = core_config
 
-    def save_cores(self, wsi_image: WholeSlideImage, cores: List[Core], resize: Optional[Union[int, Tuple[int, int]]] = None):
-        for idx, core in enumerate(tqdm(cores)):
+        self.core_format = self.core_config.core_format.value
+        self.resize = self.core_config.resize
+        self.resize = (self.resize, self.resize) if isinstance(self.resize, int) else self.resize
+
+    def get_core_naming_convention(self, wsi_name, core: Core) -> str:
+        # How are we naming our cores so they can be saved as independant images
+        # Only the name, the suffix is determined by self.core_format
+
+        core_name = f"{wsi_name}_{core.bbox.x}_{core.bbox.y}_L{core.level}_{core.bbox.w}_{core.bbox.h}"
+
+        if self.resize:
+            core_name += f"_resized_{self.resize[0]}_{self.resize[1]}"
+
+        return core_name
+
+    @staticmethod
+    def parse_core_from_path(core_path: Path) -> Core:
+        core_path = Path(core_path)
+
+        core_name = core_path.stem
+        x, y, l, w, h = core_name.split("_")[-5:]
+        l = l[1]  # Removing L
+        x, y, l, w, h = map(int, [x, y, l, w, h])
+
+        return Core(BoundingBox(x, y, w, h), annotations=[], level=l)
+
+    def save_cores(self, wsi_image: WholeSlideImage, cores: List[Core], with_annotations=False):
+        for core in tqdm(cores, desc=f"Extracting {wsi_image.name} cores and saving to disk"):
             core_image = self._extract_core_image(wsi_image, core)
-            core_name = f"{wsi_image.name}_Core_{idx}_L{core.level}_{core.bbox.w}_{core.bbox.h}"
+            core_name = self.get_core_naming_convention(wsi_name=wsi_image.name, core=core)
 
-            if resize:
-                resize = (resize, resize) if isinstance(resize, int) else resize
-                core_image = core_image.resize(resize)
-                core_name += f"_resized_{resize[0]}_{resize[1]}"
+            if self.resize:
+                core_image = core_image.resize(self.resize)
 
-            core_image.save(self.output_dir / f"{core_name}.{self.cores_format}")
+            core_image.save(self.output_dir / f"{core_name}.{self.core_format}")
 
             if core.annotations:
-                if resize:
-                    self.resize_annotations(core=core, new_size=resize)
+                if self.resize:
+                    self.resize_annotations(core=core, new_size=self.resize)
 
-            # Save anyway and let the others like YOLO format handle it
-            self._save_annotations(core, idx, core_name)
+            if with_annotations:
+                self._save_annotations(core, core_name=core_name)
 
     @staticmethod
     def _extract_core_image(wsi_image: WholeSlideImage, core: Core):
         return wsi_image.wsi.read_region((core.bbox.x, core.bbox.y), core.level, (core.bbox.w, core.bbox.h)).convert("RGB")
 
-    def _save_annotations(self, core: Core, core_idx: int, core_name: str):
+    def _save_annotations(self, core: Core, core_name: str):
         if self.annotation_format == AnnotationFormat.YOLO:
             self._save_yolo_annotations(core, core_name)
         else:
