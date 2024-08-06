@@ -145,67 +145,64 @@ class YOLOInference(InferenceInterface):
         return cores_with_lesions
 
 
+import sys
 import cv2
 import glob
-import argparse
+import importlib
 from PIL import Image
 from damo.base_models.core.ops import RepConv
-from damo.config.base import parse_config
 from damo.detectors.detector import build_local_model
-from damo.utils import get_model_info, vis, postprocess
+from damo.utils import vis
 from damo.utils.demo_utils import transform_img
-from damo.structures.image_list import ImageList
-from damo.structures.bounding_box import BoxList
+from damo.structures.image_list import ImageList, to_image_list
+
+
+def get_config_by_file(config_file):
+    try:
+        sys.path.append(os.path.dirname(config_file))
+        current_config = importlib.import_module(os.path.basename(config_file).split(".")[0])
+        exp = current_config.Config()
+    except Exception:
+        raise ImportError("{} doesn't contains class named 'Config'".format(config_file))
+    return exp
+
+
+def parse_config(config_file):
+    """
+    get config object by file.
+    Args:
+        config_file (str): file path of config.
+    """
+    assert config_file is not None, "plz provide config file"
+    if config_file is not None:
+        return get_config_by_file(config_file)
 
 
 class DamoYOLOInference(InferenceInterface):
 
-    @staticmethod
-    def make_parser():
-        parser = argparse.ArgumentParser("DAMO-YOLO Demo")
+    def __init__(
+        self,
+        config_file_path,
+        model_args,
+        save_result=False,
+        infer_size=[640, 640],
+        output_dir="./",
+        ckpt=None,
+    ):
+        assert "batch_size" in model_args
+        assert "conf" in model_args
 
-        # parser.add_argument("input_type", default="image", help="input type, support [image, video, camera]")
-        parser.add_argument(
-            "-f",
-            "--config_file",
-            default=None,
-            type=str,
-            help="pls input your config file",
-        )
-        parser.add_argument("-p", "--path", default="./assets/dog.jpg", type=str, help="path to image or video")
-        parser.add_argument("--camid", type=int, default=0, help="camera id, necessary when input_type is camera")
-        parser.add_argument("--engine", default=None, type=str, help="engine for inference")
-        parser.add_argument("--device", default="cuda", type=str, help="device used to inference")
-        parser.add_argument("--output_dir", default="./demo", type=str, help="where to save inference results")
-        parser.add_argument("--conf", default=0.3, type=float, help="conf of visualization")
-        parser.add_argument("--infer_size", nargs="+", type=int, help="test img size")
-        parser.add_argument("--end2end", action="store_true", help="trt engine with nms")
-        parser.add_argument("--save_result", default=True, type=bool, help="whether save visualization results")
+        self.model_args = model_args
+        self.model_args["save_result"] = save_result
+        if not ("device" in self.model_args):
+            self.model_args["device"] = "cuda"
 
-        return parser
+        self.device = self.model_args["device"]
 
-    def __init__(self, config_file_path, infer_size=[640, 640], device="cuda", output_dir="./", ckpt=None, end2end=False):
-        args = self.make_parser().parse_args()
-        self.args = args
-        # self.args.input_type = "image"
-
-        config = parse_config(config_file_path)
+        config = get_config_by_file(config_file_path)
 
         self.ckpt_path = ckpt
-        suffix = ckpt.split(".")[-1]
-        if suffix == "onnx":
-            self.engine_type = "onnx"
-        elif suffix == "trt":
-            self.engine_type = "tensorRT"
-        elif suffix in ["pt", "pth"]:
-            self.engine_type = "torch"
-        self.end2end = end2end  # only work with tensorRT engine
         self.output_dir = output_dir
-
-        if torch.cuda.is_available() and device == "cuda":
-            self.device = "cuda"
-        else:
-            self.device = "cpu"
 
         if "class_names" in config.dataset:
             self.class_names = config.dataset.class_names
@@ -218,20 +215,15 @@ class DamoYOLOInference(InferenceInterface):
         self.infer_size = infer_size
         config.dataset.size_divisibility = 0
         self.config = config
-        self.model = self._build_engine(self.config, self.engine_type)
+        self.model = self._build_engine(self.config, "torch")
 
-    def _pad_image(self, img, target_size):
-        n, c, h, w = img.shape
-        assert n == 1
-        assert h <= target_size[0] and w <= target_size[1]
-        target_size = [n, c, target_size[0], target_size[1]]
-        pad_imgs = torch.zeros(*target_size)
-        pad_imgs[:, :c, :h, :w].copy_(img)
+    def _pad_image(self, imgs, target_size):
+        if isinstance(target_size, (list, tuple)) and len(target_size) == 2:
+            max_size = (3, target_size[0], target_size[1])  # Add channel dimension
+        else:
+            raise ValueError("target_size should be a list or tuple of length 2")
 
-        img_sizes = [img.shape[-2:]]
-        pad_sizes = [pad_imgs.shape[-2:]]
-
-        return ImageList(pad_imgs, img_sizes, pad_sizes)
+        return to_image_list(imgs, size_divisible=32, max_size=max_size)
 
     def _build_engine(self, config, engine_type):
 
@@ -249,38 +241,50 @@ class DamoYOLOInference(InferenceInterface):
 
         return model
 
-    def preprocess(self, origin_img):
+    def preprocess(self, origin_imgs):
 
-        img = transform_img(origin_img, 0, **self.config.test.augment.transform, infer_size=self.infer_size)
-        # img is a image_list
-        oh, ow, _ = origin_img.shape
-        img = self._pad_image(img.tensors, self.infer_size)
+        processed_imgs = []
+        original_sizes = []
 
-        img = img.to(self.device)
-        return img, (ow, oh)
+        for origin_img in origin_imgs:
+            origin_img = np.asarray(origin_img)
 
-    def postprocess(self, preds, image, origin_shape=None):
+            img = transform_img(origin_img, 0, **self.config.test.augment.transform, infer_size=self.infer_size)
+            oh, ow, _ = origin_img.shape
+            processed_imgs.append(img.tensors.squeeze(0))
+            original_sizes.append((ow, oh))
 
-        if self.engine_type == "torch":
-            output = preds
+        # Pad images to the same size
+        imgs = self._pad_image(processed_imgs, self.infer_size)
+        imgs = imgs.to(self.device)
 
-        output = output[0].resize(origin_shape)
-        bboxes = output.bbox
-        scores = output.get_field("scores")
-        cls_inds = output.get_field("labels")
+        return imgs, original_sizes
 
-        return bboxes, scores, cls_inds
+    def postprocess(self, preds, image, origin_shapes=None):
+        batch_bboxes, batch_scores, batch_cls_inds = [], [], []
 
-    def forward(self, origin_image):
+        for output, origin_shape in zip(preds, origin_shapes):
+            output = output.resize(origin_shape)
+            bboxes = output.bbox
+            scores = output.get_field("scores")
+            cls_inds = output.get_field("labels")
 
-        image, origin_shape = self.preprocess(origin_image)
+            batch_bboxes.append(bboxes)
+            batch_scores.append(scores)
+            batch_cls_inds.append(cls_inds)
 
-        if self.engine_type == "torch":
-            output = self.model(image)
+        return batch_bboxes, batch_scores, batch_cls_inds
 
-        bboxes, scores, cls_inds = self.postprocess(output, image, origin_shape=origin_shape)
+    def forward(self, origin_images):
+        images, origin_shapes = self.preprocess(origin_images)
 
-        return bboxes, scores, cls_inds
+        outputs = self.model(images.tensors)
+
+        batch_bboxes, batch_scores, batch_cls_inds = self.postprocess(outputs, images, origin_shapes)
+
+        batch_results = list(zip(batch_bboxes, batch_scores, batch_cls_inds))
+
+        return batch_results
 
     def load_model(self, model_path: Path):
         pass
@@ -330,44 +334,42 @@ class DamoYOLOInference(InferenceInterface):
         else:
             cores_manager.save_cores(wsi, cores, with_annotations=False)
 
-        # exit(1)
-
         # Now running inference with YOLO on the directory that contains the extracted cores
 
         cores_path = glob.glob(f"{slide_extracted_cores_path}/*.{cores_manager.core_format}")
         cores_with_lesions = dict()
         count = 0
 
-        for core_path in tqdm(cores_path, desc=f"Predicting cores {wsi.name}"):
-            origin_img = np.asarray(Image.open(core_path).convert("RGB"))
+        batch_size = self.model_args["batch_size"]
+
+        for i in tqdm(range(0, len(cores_path), batch_size), desc=f"Predicting cores {wsi.name}"):
+            batch_paths = cores_path[i : i + batch_size]
+            batch_images = [Image.open(path).convert("RGB") for path in batch_paths]
+
             with torch.no_grad():
-                bboxes, scores, cls_inds = self.forward(origin_img)
+                batch_results = self.forward(batch_images)
+
+            for core_path, result in zip(batch_paths, batch_results):
+                bboxes, scores, cls_inds = result
                 bboxes, scores = bboxes.cpu().numpy(), scores.cpu().numpy()
-
-                indices = np.where(scores > self.args.conf)
-
+                indices = np.where(scores > self.model_args["conf"])
                 bboxes, scores = bboxes[indices], scores[indices]
 
-            # print(scores)
+                if len(bboxes) > 0:
+                    core = cores_manager.parse_core_from_path(core_path=core_path)
+                    boxes_with_confs = np.concatenate((bboxes, scores.reshape(len(scores), 1)), axis=1)
+                    cores_with_lesions[core] = boxes_with_confs
+                    count += len(bboxes)
 
-            if len(bboxes) > 0:
-
-                core = cores_manager.parse_core_from_path(core_path=core_path)
-                boxes_with_confs = np.concatenate((bboxes, scores.reshape(len(scores), 1)), axis=1)
-
-                cores_with_lesions[core] = boxes_with_confs
-                count += len(bboxes)
-
-                self.visualize(
-                    origin_img,
-                    bboxes,
-                    scores,
-                    cls_inds,
-                    conf=self.args.conf,
-                    save_name=Path(core_path).name,
-                    save_result=self.args.save_result,
-                )
+                    self.visualize(
+                        np.asarray(Image.open(core_path).convert("RGB")),
+                        bboxes,
+                        scores,
+                        cls_inds,
+                        conf=self.model_args["conf"],
+                        save_name=Path(core_path).name,
+                        save_result=self.model_args["save_result"],
+                    )
 
         print(f"Predicted {count} lesions for this slide {wsi.name}")
-
         return cores_with_lesions

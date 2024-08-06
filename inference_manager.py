@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 
 class ChallengeInferenceManager:
+
     def __init__(
         self,
         inference_interface: InferenceInterface,
@@ -23,6 +24,21 @@ class ChallengeInferenceManager:
         challenge_csv_path: str,
         save_to: str,
     ):
+        """
+        Initialize the ChallengeInferenceManager with necessary configurations and paths.
+
+        Parameters:
+        - inference_interface: An instance of InferenceInterface for inference operations.
+        - seg_config: Segmentationconfig object containing segmentation configurations.
+        - core_config: Coreconfig object containing core configurations.
+        - extraction_level: Integer specifying the extraction level.
+        - slides_path: Path to the directory containing slides.
+        - challenge_csv_path: Path to the CSV file for challenge data.
+        - save_to: Path to save the results.
+
+        Returns:
+        None
+        """
         self.inference_interface = inference_interface
 
         self.seg_config = seg_config
@@ -31,6 +47,12 @@ class ChallengeInferenceManager:
 
         self.slides_path = slides_path
         self.challenge_csv_path = challenge_csv_path
+
+        if Path(save_to).suffix:
+            Path(save_to).parent.mkdir(exist_ok=True, parents=True)
+        else:
+            Path(save_to).mkdir(exist_ok=True, parents=True)
+
         self.save_to = save_to
 
         self.df = pd.read_csv(challenge_csv_path, sep=",")
@@ -44,6 +66,20 @@ class ChallengeInferenceManager:
         number_of_required_boxes: int,
         slide_extracted_cores_path=None,
     ) -> List:
+        """
+        Run inference on a WholeSlideImage to predict boxes with lesions.
+
+        Parameters:
+        - wsi: WholeSlideImage object representing the slide to run inference on.
+        - seg_config: Segmentationconfig object containing segmentation configurations.
+        - core_config: Coreconfig object containing core configurations.
+        - extraction_level: Integer specifying the extraction level.
+        - number_of_required_boxes: Integer specifying the number of required boxes.
+        - slide_extracted_cores_path: Path to save extracted cores (default is None).
+
+        Returns:
+        - List of final predicted boxes after post-processing.
+        """
 
         cores_with_lesions = self.inference_interface.predict_slide_dir(
             wsi=wsi,
@@ -96,4 +132,8 @@ class ChallengeInferenceManager:
             df.at[i, "x2"] = xx
             df.at[i, "y2"] = yy
 
-        df.to_csv(Path(self.save_to).stem + ".csv", sep=",", index=None)
+        self.save_to = Path(self.save_to)
+        if self.save_to.suffix != ".csv":
+            self.save_to = self.save_to.with_suffix(".csv")
+
+        df.to_csv(self.save_to, sep=",", index=None)

@@ -15,6 +15,7 @@ class TissueSegment:
 
 
 class TissueSegmenter:
+    # Inspired from https://github.com/mahmoodlab/CLAM/blob/master/wsi_core/WholeSlideImage.py
 
     def __init__(self, config: Segmentationconfig):
         self.config = config
