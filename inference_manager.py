@@ -6,7 +6,8 @@ import pandas as pd
 import utils
 from config import Segmentationconfig, Coreconfig
 from wsi import WholeSlideImage
-from core_extractor import Core
+from core_extractor import Core, BoundingBox
+from core_manager import CoreAnnotationManager
 from infer_interface import InferenceInterface
 
 from tqdm import tqdm
@@ -137,3 +138,63 @@ class ChallengeInferenceManager:
             self.save_to = self.save_to.with_suffix(".csv")
 
         df.to_csv(self.save_to, sep=",", index=None)
+
+
+class WSLInferenceManager:
+    """
+    Used to augment the dataset.
+    Will use the slides that have a presence of lesions, extract their cores and save the cores with lesions
+    to add them to training set.
+    """
+
+    def __init__(
+        self,
+        inference_interface: InferenceInterface,
+        seg_config: Segmentationconfig,
+        core_config: Coreconfig,
+        extraction_level: int,
+        slides_path: str,
+        save_to: str,
+    ):
+        self.inference_interface = inference_interface
+
+        self.seg_config = seg_config
+        self.core_config = core_config
+        self.extraction_level = extraction_level
+
+        self.slides_path = slides_path
+
+        if Path(save_to).suffix:
+            Path(save_to).parent.mkdir(exist_ok=True, parents=True)
+        else:
+            Path(save_to).mkdir(exist_ok=True, parents=True)
+
+        self.save_to = save_to
+
+    def run_slide_inference(
+        self,
+        wsi: WholeSlideImage,
+        seg_config: Segmentationconfig,
+        core_config: Coreconfig,
+        extraction_level: int,
+        slide_extracted_cores_path=None,
+    ) -> List:
+        cores_with_lesions = self.inference_interface.predict_slide_dir(
+            wsi=wsi,
+            seg_config=seg_config,
+            core_config=core_config,
+            extraction_level=extraction_level,
+            slide_extracted_cores_path=slide_extracted_cores_path,
+        )
+
+        for core, bboxes in cores_with_lesions.items():
+            for box in bboxes:
+                box = box[:4]
+                core.annotations.append(BoundingBox(*utils.xyxy2xywh(box)))
+
+        cores_manager = CoreAnnotationManager(slide_extracted_cores_path, core_config=core_config)
+        cores_manager.save_cores(wsi_image=wsi, cores=list(cores_with_lesions.keys()), with_annotations=True)
+
+        wsi.wsi.close()
+
+        return cores_with_lesions

@@ -5,9 +5,9 @@ _base_ = [
 experiment_id = "rtmdet_s_8xb32-300e"
 
 
-classes = ("A", "B")
+classes = ("lesion",)
 num_classes = len(classes)
-metainfo = {"classes": classes, "palette": [(190, 77, 37), (37, 150, 190)]}
+metainfo = {"classes": classes, "palette": [(255, 0, 0)]}
 
 model = dict(
     data_preprocessor=dict(
@@ -21,7 +21,7 @@ model = dict(
     bbox_head=dict(num_classes=num_classes),
 )
 
-image_scale = (512, 672)
+image_scale = (640, 640)
 batch_size = 4
 n_workers = 2
 n_gpu = 1
@@ -54,7 +54,7 @@ train_pipeline = [
         transforms=albu_train_transforms,
         bbox_params=dict(
             type="BboxParams",
-            format="pascal_voc",
+            format="coco",
             label_fields=["gt_bboxes_labels", "gt_ignore_flags"],
             min_visibility=0.0,
             filter_lost_elements=True,
@@ -75,22 +75,29 @@ test_pipeline = val_pipeline
 
 # dataset settings
 dataset_type = "CocoDataset"
-data_root = "/data/xxx"
-train_annotations = "annotations/xxx.json"
-val_annotations = "annotations/xxx.json"
-test_annotations = "annotations/xxx.json"
-image_data_prefix = data_root + "images/"
+data_root = r"/media/lipade/Crucial X6/Trusti/good_dataset_with_soft_labels/"
+train_annotations = r"annotations/train.json"
+val_annotations = r"annotations/val.json"
+# image_data_prefix = data_root + "images/"
 backend_args = None
 
 workers_configs = {
     "num_workers": 2,
     "persistent_workers": True,
 }
-dataset_configs = {
+train_dataset_config = {
     "type": dataset_type,
     "metainfo": metainfo,
     "data_root": data_root,
-    "data_prefix": dict(img=image_data_prefix),
+    "data_prefix": dict(img="train/"),
+    "backend_args": backend_args,
+}
+
+val_dataset_config = {
+    "type": dataset_type,
+    "metainfo": metainfo,
+    "data_root": data_root,
+    "data_prefix": dict(img="val/"),
     "backend_args": backend_args,
 }
 
@@ -100,7 +107,7 @@ train_dataloader = dict(
     sampler=dict(type="DefaultSampler", shuffle=True),
     **workers_configs,
     dataset=dict(
-        ann_file=train_annotations, filter_cfg=dict(filter_empty_gt=True, min_size=32), pipeline=train_pipeline, **dataset_configs
+        ann_file=train_annotations, filter_cfg=dict(filter_empty_gt=True, min_size=32), pipeline=train_pipeline, **train_dataset_config
     ),
 )
 val_dataloader = dict(
@@ -108,19 +115,11 @@ val_dataloader = dict(
     drop_last=False,
     sampler=dict(type="DefaultSampler", shuffle=False),
     **workers_configs,
-    dataset=dict(ann_file=val_annotations, pipeline=val_pipeline, test_mode=True, **dataset_configs),
-)
-test_dataloader = dict(
-    batch_size=1,
-    drop_last=False,
-    sampler=dict(type="DefaultSampler", shuffle=False),
-    **workers_configs,
-    dataset=dict(ann_file=test_annotations, pipeline=test_pipeline, test_mode=True, **dataset_configs),
+    dataset=dict(ann_file=val_annotations, pipeline=val_pipeline, test_mode=True, **val_dataset_config),
 )
 
 # evaluator settings
 val_evaluator = dict(type="CocoMetric", ann_file=data_root + val_annotations, metric="bbox", format_only=False, backend_args=backend_args)
-test_evaluator = dict(type="CocoMetric", ann_file=data_root + test_annotations, metric="bbox", format_only=False, backend_args=backend_args)
 
 # optimizer settings
 optimizer = dict(type="AdamW", lr=eta, weight_decay=0.0001)
@@ -139,7 +138,7 @@ default_hooks = dict(checkpoint=dict(type="CheckpointHook", interval=-1, save_be
 
 workflow = [("train", 1), ("val", 1)]
 
-work_dir = f"logs/{experiment_id}"
+work_dir = f"rtmdet_s_8xb32_logs/{experiment_id}"
 
 # logger settings
 vis_backends = [
@@ -147,3 +146,5 @@ vis_backends = [
     dict(type="TensorboardVisBackend"),
 ]
 visualizer = dict(type="DetLocalVisualizer", vis_backends=vis_backends, name="visualizer")
+
+load_from = r"/home/lipade/mmdetection/rtmdet_tiny_8xb32-300e_coco_20220902_112414-78e30dcc.pth"

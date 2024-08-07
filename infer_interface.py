@@ -230,6 +230,8 @@ class DamoYOLOInference(InferenceInterface):
         print(f"Inference with {engine_type} engine!")
         if engine_type == "torch":
             model = build_local_model(config, self.device)
+
+            print(f"Loading Model from {self.ckpt_path}")
             ckpt = torch.load(self.ckpt_path, map_location=self.device)
             model.load_state_dict(ckpt["model"], strict=True)
             for layer in model.modules():

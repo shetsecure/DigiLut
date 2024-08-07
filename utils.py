@@ -151,6 +151,12 @@ def convert_to_yolo_format(
     return (class_id, x_center, y_center, width, height)
 
 
+def xyxy2xywh(xyxy_box: Tuple[int, ...]):
+    x, y, xx, yy = xyxy_box
+
+    return x, y, xx - x, yy - y
+
+
 def xyxy_to_0(wsi: WholeSlideImage, core, box):
 
     extract_level_to_0 = wsi.wsi.level_downsamples[core.level]
